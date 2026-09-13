@@ -752,7 +752,9 @@ def _translate_lattice_universes(univ_ids, center, get_universe, universes):
     univ_ids : numpy.ndarray
         Universe IDs filling the lattice elements
     center : numpy.ndarray
-        Center of the [0,0,0] lattice element
+        Position of the origin of an OpenMC lattice element in the coordinates
+        of the MCNP universe filling it (the center of the [0,0,0] element for
+        a 3D lattice)
     get_universe : callable
         Function returning the universe with a given ID
     universes : dict
@@ -1290,6 +1292,15 @@ def get_openmc_universes(cells, surfaces, materials, data):
                     c['parameters']['fill'])
                 (xmin, xmax), (ymin, ymax), (zmin, zmax) = ranges
 
+                # A finite lattice with a single axial layer becomes a 2D
+                # lattice, so the axial offset of the layer is applied by
+                # translating the universes instead
+                layer_offset = 0.0
+                if sides['z'] and _is_single_layer(ranges, inf_lattice):
+                    layer_offset = zmin*(v1 - v0)[2]
+                    sides['z'] = []
+                    v0, v1, pitch = v0[:2], v1[:2], pitch[:2]
+
                 if pitch.size == 3:
                     index0 = np.array([xmin, ymin, zmin])
                     index1 = np.array([xmax, ymax, zmax])
@@ -1338,6 +1349,7 @@ def get_openmc_universes(cells, surfaces, materials, data):
                 # to translate the universe
                 center = np.zeros(3)
                 center[:v0.size] = (v0 + v1)/2
+                center[2] -= layer_offset
                 if not np.all(center == 0.0):
                     univ_ids = _translate_lattice_universes(
                         univ_ids, center, get_universe, universes)

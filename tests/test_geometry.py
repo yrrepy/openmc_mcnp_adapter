@@ -250,3 +250,40 @@ def test_nested_lattice(inner_first):
     assert geometry.find((4.0, 0.0, 0.0))[-1].fill.id == 2
     # Same for the outer element at (0, 3, 0)
     assert geometry.find((0.0, 3.0, 0.0))[-1].fill.id == 1
+
+
+@mark.parametrize("k,bottom_first", [(0, False), (2, False), (-3, False), (2, True)],
+                  ids=['k0', 'k2', 'k-3', 'k2-bottom-first'])
+def test_single_layer_lattice(k, bottom_first):
+    # The single layer at axial index k of a lattice whose element spans
+    # z = 0 to 1 becomes a 2D lattice whose universes are translated to the
+    # layer. Listing the bottom plane first puts index k below the element.
+    z_planes = "16 -15" if bottom_first else "-15 16"
+    z0 = -k if bottom_first else k
+    mcnp_str = dedent(f"""
+    title
+    1 0 -1 FILL=2
+    2 0 -11 12 -13 14 {z_planes} LAT=1 U=2 FILL=-1:1 -1:1 {k}:{k} 3 3 3 3 3 3 3 3 3
+    3 1 -1.0 -21 U=3
+    4 2 -2.0 +21 U=3
+    9 0 1
+
+    1 rpp -1.5 1.5 -1.5 1.5 {z0} {z0 + 1}
+    11 px 0.5
+    12 px -0.5
+    13 py 0.5
+    14 py -0.5
+    15 pz 1.0
+    16 pz 0.0
+    21 s 0.2 0.1 0.6 0.3
+
+    m1   1001.80c  1.0
+    m2   1002.80c  1.0
+    """)
+    geometry = mcnp_str_to_model(mcnp_str).geometry
+    assert geometry.get_all_lattices()[2].ndim == 2
+
+    # Center of the sphere in two elements, and a point below the sphere
+    assert geometry.find((1.2, 0.1, z0 + 0.6))[-1].fill.id == 1
+    assert geometry.find((0.2, -0.9, z0 + 0.6))[-1].fill.id == 1
+    assert geometry.find((0.2, 0.1, z0 + 0.1))[-1].fill.id == 2
