@@ -6,7 +6,8 @@ import openmc
 from openmc.model.surface_composite import OrthogonalBox, \
     RectangularParallelepiped, RightCircularCylinder, ConicalFrustum, \
     XConeOneSided, YConeOneSided, ZConeOneSided
-from openmc_mcnp_adapter import mcnp_str_to_model, get_openmc_surfaces
+from openmc_mcnp_adapter import mcnp_str_to_model, get_openmc_surfaces, \
+    RightHexagonalPrism
 from pytest import approx, mark, raises, warns
 
 
@@ -554,5 +555,94 @@ def test_rpp_facets():
     assert (0., 0., 6.0) not in cells[3].region
 
 
+SQRT3_2 = np.sqrt(3.0)/2.0
+
+
+def plane_coeffs(plane):
+    """Return the (a, b, c, d) coefficients of a plane"""
+    return (plane.a, plane.b, plane.c, plane.d)
+
+
+def test_rhp_macrobody():
+    # Regular hexagonal prism along the z-axis with apothem 1.0
+    coeffs = (0.0, 0.0, -5.0, 0.0, 0.0, 10.0, 1.0, 0.0, 0.0)
+    surf = convert_surface("rhp", coeffs)
+    assert isinstance(surf, RightHexagonalPrism)
+
+    # Facet planes have outward unit normals and d equal to the distance from
+    # the origin; the third facet is the first rotated by 60 degrees about h
+    assert plane_coeffs(surf.r_max) == approx((1.0, 0.0, 0.0, 1.0))
+    assert plane_coeffs(surf.r_min) == approx((-1.0, 0.0, 0.0, 1.0))
+    assert plane_coeffs(surf.s_max) == approx((0.5, SQRT3_2, 0.0, 1.0))
+    assert plane_coeffs(surf.s_min) == approx((-0.5, -SQRT3_2, 0.0, 1.0))
+    assert plane_coeffs(surf.t_max) == approx((-0.5, SQRT3_2, 0.0, 1.0))
+    assert plane_coeffs(surf.t_min) == approx((0.5, -SQRT3_2, 0.0, 1.0))
+    assert plane_coeffs(surf.top) == approx((0.0, 0.0, 1.0, 5.0))
+    assert plane_coeffs(surf.bottom) == approx((0.0, 0.0, -1.0, 5.0))
+
+    # Check points near the facets; +y points at a vertex, 1/cos(30) away
+    assert (0.0, 0.0, 0.0) in -surf
+    assert (0.99, 0.0, 0.0) in -surf
+    assert (1.01, 0.0, 0.0) in +surf
+    assert tuple(0.99*np.array((0.5, SQRT3_2, 0.0))) in -surf
+    assert tuple(1.01*np.array((0.5, SQRT3_2, 0.0))) in +surf
+    assert (0.0, 1.14, 0.0) in -surf
+    assert (0.0, 1.17, 0.0) in +surf
+    assert (0.0, 0.0, 4.99) in -surf
+    assert (0.0, 0.0, 5.01) in +surf
+    assert (0.0, 0.0, -5.01) in +surf
+
+    # The rotation giving the default facet vectors follows the direction of
+    # the height vector, so a prism along -z has its third facet at -60 degrees
+    coeffs = (0.0, 0.0, 5.0, 0.0, 0.0, -10.0, 1.0, 0.0, 0.0)
+    surf = convert_surface("rhp", coeffs)
+    assert plane_coeffs(surf.s_max) == approx((0.5, -SQRT3_2, 0.0, 1.0))
+    assert plane_coeffs(surf.top) == approx((0.0, 0.0, -1.0, 5.0))
+
+
+def test_rhp_facets():
+    # The surface card has only 7 of the 9 entries, which MCNP5 accepted
+    mcnp_str = dedent("""
+    title
+    1  1 -1.0  -1.1 -1.2
+    2  1 -1.0  -1.3 -1.4
+    3  1 -1.0  -1.7 -1.8
+    4  1 -1.0  1.1
+    5  1 -1.0  -1
+
+    1  hex 0.0 0.0 -5.0  0.0 0.0 10.0  1.0
+
+    m1   1001.80c  3.0
+    """)
+    with warns(UserWarning):
+        model = mcnp_str_to_model(mcnp_str)
+    cells = model.geometry.get_all_cells()
+
+    # Slab between the first and second facets
+    assert (0., 0., 0.) in cells[1].region
+    assert (1.5, 0., 0.) not in cells[1].region
+    assert (0., 5., 0.) in cells[1].region
+
+    # Slab between the third and fourth facets
+    assert (0., 0., 0.) in cells[2].region
+    assert tuple(1.5*np.array((0.5, SQRT3_2, 0.))) not in cells[2].region
+    assert tuple(5.*np.array((-SQRT3_2, 0.5, 0.))) in cells[2].region
+
+    # Slab between the two end facets
+    assert (0., 0., 0.) in cells[3].region
+    assert (0., 0., 6.) not in cells[3].region
+    assert (0., 0., -6.) not in cells[3].region
+    assert (50., 0., 0.) in cells[3].region
+
+    # Outside of the first facet
+    assert (2., 0., 0.) in cells[4].region
+    assert (0., 0., 0.) not in cells[4].region
+
+    # Inside of the entire macrobody
+    assert (0., 0., 0.) in cells[5].region
+    assert (1.5, 0., 0.) not in cells[5].region
+    assert (0., 0., 6.) not in cells[5].region
+
+
 # Remaining macrobody / complex surfaces not yet implemented in conversion:
-# RHP, HEX, REC, ELL, WED, ARB
+# REC, ELL, WED, ARB

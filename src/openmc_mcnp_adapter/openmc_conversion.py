@@ -24,6 +24,144 @@ from openmc.model import surface_composite
 from .parse import parse, _COMPLEMENT_RE, _CELL_FILL_RE
 
 
+def _rotate_about_axis(v, axis, angle):
+    """Rotate a vector about an arbitrary axis.
+
+    The rotation follows the right-hand rule about `axis` and is evaluated with
+    Rodrigues' rotation formula.
+
+    Parameters
+    ----------
+    v : numpy.ndarray
+        Vector to be rotated
+    axis : numpy.ndarray
+        Unit vector along the axis of rotation
+    angle : float
+        Angle of rotation in radians
+
+    Returns
+    -------
+    numpy.ndarray
+        Rotated vector
+
+    """
+    cos_angle = np.cos(angle)
+    sin_angle = np.sin(angle)
+    return (v*cos_angle + np.cross(axis, v)*sin_angle +
+            axis*np.dot(axis, v)*(1.0 - cos_angle))
+
+
+# Magnitude of the height vector at or above which an RHP/HEX macrobody is
+# considered infinite along its axis, as in MCNP
+_RHP_INFINITE_HEIGHT = 1.0e6
+
+
+class RightHexagonalPrism(CompositeSurface):
+    """Right hexagonal prism
+
+    This composite surface is composed of six or eight planar surfaces that
+    form a hexagonal prism, equivalent to the MCNP ``RHP``/``HEX`` macrobody.
+    The prism is centered on the axis that starts at ``v`` and extends along
+    ``h``. The vectors ``r``, ``s``, and ``t`` point from that axis to the
+    center of the first, third, and fifth facet, respectively; the second,
+    fourth, and sixth facets are the opposite faces. When the magnitude of
+    ``h`` is greater than or equal to 1e6 cm, the prism is taken to be infinite
+    along its axis and the two end facets are omitted.
+
+    This class acts as a proper surface, meaning that unary `+` and `-`
+    operators applied to it will produce a half-space. The negative side is
+    defined to be the region inside of the prism.
+
+    Parameters
+    ----------
+    v : iterable of float
+        (x,y,z) coordinates of the bottom of the prism axis
+    h : iterable of float
+        Vector along the axis of the prism starting from ``v``
+    r : iterable of float
+        Vector from the axis of the prism to the center of the first facet
+    s : iterable of float, optional
+        Vector from the axis of the prism to the center of the third facet.
+        When not specified, it is ``r`` rotated by 60 degrees about ``h``.
+    t : iterable of float, optional
+        Vector from the axis of the prism to the center of the fifth facet.
+        When not specified, it is ``r`` rotated by 120 degrees about ``h``.
+    **kwargs
+        Keyword arguments passed to underlying plane classes
+
+    Attributes
+    ----------
+    r_max, r_min : openmc.Plane
+        Planes at the end of ``r`` (first facet) and opposite to it (second
+        facet)
+    s_max, s_min : openmc.Plane
+        Planes at the end of ``s`` (third facet) and opposite to it (fourth
+        facet)
+    t_max, t_min : openmc.Plane
+        Planes at the end of ``t`` (fifth facet) and opposite to it (sixth
+        facet)
+    top : openmc.Plane
+        Plane at the end of ``h`` (seventh facet). Not present for an infinite
+        prism.
+    bottom : openmc.Plane
+        Plane at ``v`` (eighth facet). Not present for an infinite prism.
+
+    """
+    _surface_names = ('r_max', 'r_min', 's_max', 's_min', 't_max', 't_min',
+                      'top', 'bottom')
+
+    def __init__(self, v, h, r, s=None, t=None, **kwargs):
+        v = np.asarray(v, dtype=float)
+        h = np.asarray(h, dtype=float)
+        r = np.asarray(r, dtype=float)
+
+        height = np.linalg.norm(h)
+        if height == 0.0:
+            raise ValueError('Height vector of hexagonal prism must be nonzero')
+        u = h / height
+
+        # Facet vectors of a regular hexagon are obtained by rotating r about
+        # the axis of the prism
+        if s is None:
+            s = _rotate_about_axis(r, u, pi/3)
+        else:
+            s = np.asarray(s, dtype=float)
+        if t is None:
+            t = _rotate_about_axis(r, u, 2*pi/3)
+        else:
+            t = np.asarray(t, dtype=float)
+
+        # Each facet is a plane with an outward unit normal, so that d is the
+        # signed distance from the origin to the plane
+        for name, vec in (('r', r), ('s', s), ('t', t)):
+            length = np.linalg.norm(vec)
+            if length == 0.0:
+                raise ValueError('Facet vectors of hexagonal prism must be '
+                                 'nonzero')
+            n = vec / length
+            setattr(self, f'{name}_max',
+                    openmc.Plane(*n, np.dot(n, v + vec), **kwargs))
+            setattr(self, f'{name}_min',
+                    openmc.Plane(*(-n), np.dot(-n, v - vec), **kwargs))
+
+        if height >= _RHP_INFINITE_HEIGHT:
+            # Prism is infinite along its axis; only the six side facets exist
+            self._surface_names = self._surface_names[:6]
+        else:
+            self.top = openmc.Plane(*u, np.dot(u, v + h), **kwargs)
+            self.bottom = openmc.Plane(*(-u), np.dot(-u, v), **kwargs)
+
+    def __neg__(self):
+        region = (-self.r_max & -self.r_min & -self.s_max & -self.s_min &
+                  -self.t_max & -self.t_min)
+        if hasattr(self, 'top'):
+            region &= (-self.top & -self.bottom)
+        return region
+
+
+RHP = RightHexagonalPrism
+
+
 # The facet number corresponding to the SurfaceComposite's surface by
 # attribute name and whether or not to flip the sense of that surface
 # based on the facet surface's relationship to the composite surface region
@@ -40,6 +178,16 @@ _MACROBODY_FACETS = {
         1: ('cyl', False),
         2: ('top', False),
         3: ('bottom', True)
+    },
+    RHP: {
+        1: ('r_max', False),
+        2: ('r_min', False),
+        3: ('s_max', False),
+        4: ('s_min', False),
+        5: ('t_max', False),
+        6: ('t_min', False),
+        7: ('top', False),
+        8: ('bottom', False),
     },
     RPP: {
         1: ('xmax', False),
@@ -380,6 +528,26 @@ def get_openmc_surfaces(surfaces, data):
             r1 = coeffs[6]
             r2 = coeffs[7]
             surf = TRC(v, h, r1, r2)
+        elif s['mnemonic'] in ('rhp', 'hex'):
+            if len(coeffs) < 9:
+                warnings.warn(
+                    f"{s['mnemonic'].upper()} surface {s['id']} has only "
+                    f"{len(coeffs)} entries; missing entries assumed to be zero."
+                )
+                coeffs = list(coeffs) + [0.0]*(9 - len(coeffs))
+            elif len(coeffs) not in (9, 15):
+                raise ValueError(
+                    f"{s['mnemonic'].upper()} surface {s['id']} has "
+                    f"{len(coeffs)} entries; expected 9 (regular hexagon) or "
+                    "15 (with explicit facet vectors)."
+                )
+            v = coeffs[:3]
+            h = coeffs[3:6]
+            r = coeffs[6:9]
+            if len(coeffs) == 15:
+                surf = RHP(v, h, r, coeffs[9:12], coeffs[12:15])
+            else:
+                surf = RHP(v, h, r)
         else:
             raise NotImplementedError('Surface type "{}" not supported'
                                       .format(s['mnemonic']))
