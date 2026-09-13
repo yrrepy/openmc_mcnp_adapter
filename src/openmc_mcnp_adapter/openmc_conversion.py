@@ -713,6 +713,33 @@ def _parse_lattice_fill(fill):
     return ranges, univ_ids, inf_lattice
 
 
+def _is_single_layer(ranges, inf_lattice):
+    """Whether a finite lattice has a single axial layer
+
+    Such a lattice is converted to a 2D OpenMC lattice, with its universes
+    translated to the position of the layer. In MCNP, a particle leaving the
+    layer through its top or bottom is lost, so a valid model never depends on
+    these boundaries. In OpenMC, they can coincide with the boundaries of the
+    cell or lattice element above and be crossed first by roundoff, which
+    loses the particle in a lattice that has no outer universe. An infinite
+    lattice is excluded because it repeats the layer axially.
+
+    Parameters
+    ----------
+    ranges : list of tuple of int
+        Lower and upper index along each of the three lattice directions
+    inf_lattice : bool
+        Whether the lattice is infinite
+
+    Returns
+    -------
+    bool
+        Whether the lattice is finite with a single axial index
+
+    """
+    return not inf_lattice and ranges[2][0] == ranges[2][1]
+
+
 def _translate_lattice_universes(univ_ids, center, get_universe, universes):
     """Replace the fill universes of a lattice by translated copies
 
@@ -1195,6 +1222,13 @@ def get_openmc_universes(cells, surfaces, materials, data):
                 # Get extent of lattice
                 ranges, univ_ids, inf_lattice = _parse_lattice_fill(
                     c['parameters']['fill'])
+
+                # A finite lattice with a single axial layer becomes a 2D
+                # lattice, so the axial offset of the layer is applied by
+                # translating the universes instead
+                if len(vectors) == 4 and _is_single_layer(ranges, inf_lattice):
+                    center[2] = -ranges[2][0]*vectors[3][2]
+                    vectors = vectors[:3]
 
                 # A universe ID same as the ID assigned to the cell itself
                 # means the material of the cell. The same universe fills the

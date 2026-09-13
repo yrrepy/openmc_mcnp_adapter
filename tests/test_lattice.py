@@ -122,3 +122,42 @@ def test_hex_lattice_3d():
     model = mcnp_str_to_model(mcnp_str)
 
     _assert_elements(model, ranges, (0., 0., 0.), vectors, univ_ids)
+
+
+@mark.parametrize("k", [0, 2, -3])
+def test_hex_lattice_single_layer(k):
+    # The single layer at axial index k of a prism 10 cm high centered at z=2
+    # becomes a 2D lattice whose universes are translated to the layer. The
+    # sphere in universe 2 is offset from the origin of the universe, so a
+    # wrong axial position of the layer is detected.
+    mcnp_str = dedent(f"""\
+        single axial layer
+        1    0          -900   fill=50
+        2    3 -1.0     -1     lat=2 u=50 fill=-1:1 -1:1 {k}:{k}
+             2 2 2 2 50 2 2 2 2
+        10   1 -1.0     -901   u=2
+        11   2 -1.0      901   u=2
+        20   0           900
+
+        1    rhp  0 0 -3   0 0 10   1 0 0
+        900  so 100.0
+        901  s 0.3 0.0 1.0 0.8
+
+        m1   1001.80c   1.0
+        m2   8016.80c   1.0
+        m3   26056.80c  1.0
+        """)
+    model = mcnp_str_to_model(mcnp_str)
+    geometry = model.geometry
+    assert geometry.get_all_lattices()[50].ndim == 2
+
+    def material_at(point):
+        return geometry.find(point)[-1].fill.id
+
+    # Center of the sphere and a point above it in the elements next to the
+    # [0,0,k] element, which is filled with the material of the lattice cell
+    for i, j in [(1, 0), (0, 1), (-1, 1)]:
+        x, y = 2.0*i + j, SQRT3*j
+        assert material_at((x + 0.3, y, 10.0*k + 1.0)) == 1
+        assert material_at((x + 0.3, y, 10.0*k + 3.0)) == 2
+    assert material_at((0.3, 0.0, 10.0*k + 1.0)) == 3
