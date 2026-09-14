@@ -1119,6 +1119,14 @@ def get_openmc_universes(cells, surfaces, materials, data):
     # Now that all cell regions have been converted, the next loop is to create
     # actual Cell/Universe/Lattice objects
     material_clones = {}
+    # Parameters of lattice cells by universe ID, along with a cache of
+    # wrapper universes for them (OpenMC can't place a lattice directly inside
+    # another lattice)
+    lattice_params = {abs(int(ci['parameters']['u'])): ci['parameters']
+                      for ci in cells
+                      if 'lat' in ci['parameters'] and 'u' in ci['parameters']}
+    lattice_wrappers = {}
+
     for c in cells:
         cell = openmc.Cell(cell_id=c['id'])
 
@@ -1185,8 +1193,20 @@ def get_openmc_universes(cells, surfaces, materials, data):
 
                 def get_universe(uid):
                     if uid not in universes:
-                        universes[uid] = openmc.Universe(uid)
-                    return universes[uid]
+                        if uid in lattice_params:
+                            universes[uid] = _new_lattice(
+                                lattice_params[uid], uid)
+                        else:
+                            universes[uid] = openmc.Universe(uid)
+                    univ = universes[uid]
+                    if isinstance(univ, openmc.Lattice):
+                        # OpenMC cannot place a lattice directly inside
+                        # another lattice, so return a universe wrapping it
+                        if uid not in lattice_wrappers:
+                            lattice_wrappers[uid] = openmc.Universe(
+                                cells=[openmc.Cell(fill=univ)])
+                        return lattice_wrappers[uid]
+                    return univ
 
                 # Geometry of a single lattice element
                 center, vectors = _lattice_element(cell.region)
