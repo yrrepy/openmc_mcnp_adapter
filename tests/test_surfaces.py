@@ -576,13 +576,20 @@ def test_rhp_macrobody():
     assert unit_normal(surf.top) == approx((0., 0., 1.))
 
     # Points near the facets; +y points at a vertex, 1/cos(30 deg) away
+    assert (0., 0., 0.) in -surf
     assert (0.99, 0., 0.) in -surf
     assert (1.01, 0., 0.) in +surf
+    assert (-0.99, 0., 0.) in -surf
+    assert (-1.01, 0., 0.) in +surf
+    assert (0.99*0.5, 0.99*SQRT3_2, 0.) in -surf
     assert (1.01*0.5, 1.01*SQRT3_2, 0.) in +surf
     assert (0., 1.14, 0.) in -surf
     assert (0., 1.17, 0.) in +surf
     assert (0., 0., 4.99) in -surf
+    assert (0., 0., 5.01) in +surf
+    assert (0., 0., -4.99) in -surf
     assert (0., 0., -5.01) in +surf
+
 
     # The rotation giving the third facet follows the height vector, so a
     # prism along -z has it at -60 degrees
@@ -601,29 +608,44 @@ def test_rhp_facets():
     mcnp_str = dedent("""
     title
     1  1 -1.0  -1.1 -1.2
-    2  1 -1.0  -1.7 -1.8
-    3  1 -1.0  -1
+    2  1 -1.0  -1.3 -1.4
+    3  1 -1.0  -1.7 -1.8
+    4  1 -1.0  1.1
+    5  1 -1.0  -1
 
     1  hex 0.0 0.0 -5.0  0.0 0.0 10.0  1.0
 
     m1   1001.80c  3.0
     """)
-    cells = mcnp_str_to_model(mcnp_str).geometry.get_all_cells()
+    model = mcnp_str_to_model(mcnp_str)
+    cells = model.geometry.get_all_cells()
 
     # Slab between the first and second facets
-    assert (0., 5., 0.) in cells[1].region
+    assert (0., 0., 0.) in cells[1].region
     assert (1.5, 0., 0.) not in cells[1].region
     assert (-1.5, 0., 0.) not in cells[1].region
+    assert (0., 5., 0.) in cells[1].region
+
+    # Slab between the third and fourth facets
+    assert (0., 0., 0.) in cells[2].region
+    assert (1.5*0.5, 1.5*SQRT3_2, 0.) not in cells[2].region
+    assert (-1.5*0.5, -1.5*SQRT3_2, 0.) not in cells[2].region
+    assert (-5.*SQRT3_2, 5.*0.5, 0.) in cells[2].region
 
     # Slab between the two end facets
-    assert (50., 0., 0.) in cells[2].region
-    assert (0., 0., 6.) not in cells[2].region
-    assert (0., 0., -6.) not in cells[2].region
+    assert (0., 0., 0.) in cells[3].region
+    assert (0., 0., 6.) not in cells[3].region
+    assert (0., 0., -6.) not in cells[3].region
+    assert (50., 0., 0.) in cells[3].region
+
+    # Outside of the first facet
+    assert (2., 0., 0.) in cells[4].region
+    assert (0., 0., 0.) not in cells[4].region
 
     # Inside of the entire macrobody
-    assert (0., 0., 0.) in cells[3].region
-    assert (1.5, 0., 0.) not in cells[3].region
-    assert (0., 0., 6.) not in cells[3].region
+    assert (0., 0., 0.) in cells[5].region
+    assert (1.5, 0., 0.) not in cells[5].region
+    assert (0., 0., 6.) not in cells[5].region
 
 
 # Remaining macrobody / complex surfaces not yet implemented in conversion:
