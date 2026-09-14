@@ -5,7 +5,7 @@ import numpy as np
 import openmc
 from openmc.model.surface_composite import OrthogonalBox, \
     RectangularParallelepiped, RightCircularCylinder, ConicalFrustum, \
-    XConeOneSided, YConeOneSided, ZConeOneSided
+    XConeOneSided, YConeOneSided, ZConeOneSided, HexagonalPrism
 from openmc_mcnp_adapter import mcnp_str_to_model, get_openmc_surfaces
 from pytest import approx, mark, raises, warns
 
@@ -554,5 +554,77 @@ def test_rpp_facets():
     assert (0., 0., 6.0) not in cells[3].region
 
 
+SQRT3_2 = np.sqrt(3.)/2
+
+
+def unit_normal(plane):
+    """Return the unit normal of a plane"""
+    normal = np.array([plane.a, plane.b, plane.c])
+    return normal/np.linalg.norm(normal)
+
+
+def test_rhp_macrobody():
+    # Regular hexagonal prism along the z-axis with an apothem of 1 cm
+    surf = convert_surface("rhp", (0., 0., -5., 0., 0., 10., 1., 0., 0.))
+    assert isinstance(surf, HexagonalPrism)
+
+    # Facets in MCNP order have outward normals along r, then r rotated by 60
+    # and 120 degrees about h, then h
+    assert unit_normal(surf.plane_max) == approx((1., 0., 0.))
+    assert unit_normal(surf.upper_right) == approx((0.5, SQRT3_2, 0.))
+    assert unit_normal(surf.upper_left) == approx((-0.5, SQRT3_2, 0.))
+    assert unit_normal(surf.top) == approx((0., 0., 1.))
+
+    # Points near the facets; +y points at a vertex, 1/cos(30 deg) away
+    assert (0.99, 0., 0.) in -surf
+    assert (1.01, 0., 0.) in +surf
+    assert (1.01*0.5, 1.01*SQRT3_2, 0.) in +surf
+    assert (0., 1.14, 0.) in -surf
+    assert (0., 1.17, 0.) in +surf
+    assert (0., 0., 4.99) in -surf
+    assert (0., 0., -5.01) in +surf
+
+    # The rotation giving the third facet follows the height vector, so a
+    # prism along -z has it at -60 degrees
+    surf = convert_surface("rhp", (0., 0., 5., 0., 0., -10., 1., 0., 0.))
+    assert unit_normal(surf.upper_right) == approx((0.5, -SQRT3_2, 0.))
+    assert unit_normal(surf.top) == approx((0., 0., -1.))
+
+    # Explicit facet vectors are only supported for a regular hexagon
+    with raises(NotImplementedError):
+        convert_surface("rhp", (0., 0., -5., 0., 0., 10., 1., 0., 0.,
+                                0., 1., 0., -1., 0., 0.))
+
+
+def test_rhp_facets():
+    # The card has only 7 of the 9 entries; the missing ones are zero
+    mcnp_str = dedent("""
+    title
+    1  1 -1.0  -1.1 -1.2
+    2  1 -1.0  -1.7 -1.8
+    3  1 -1.0  -1
+
+    1  hex 0.0 0.0 -5.0  0.0 0.0 10.0  1.0
+
+    m1   1001.80c  3.0
+    """)
+    cells = mcnp_str_to_model(mcnp_str).geometry.get_all_cells()
+
+    # Slab between the first and second facets
+    assert (0., 5., 0.) in cells[1].region
+    assert (1.5, 0., 0.) not in cells[1].region
+    assert (-1.5, 0., 0.) not in cells[1].region
+
+    # Slab between the two end facets
+    assert (50., 0., 0.) in cells[2].region
+    assert (0., 0., 6.) not in cells[2].region
+    assert (0., 0., -6.) not in cells[2].region
+
+    # Inside of the entire macrobody
+    assert (0., 0., 0.) in cells[3].region
+    assert (1.5, 0., 0.) not in cells[3].region
+    assert (0., 0., 6.) not in cells[3].region
+
+
 # Remaining macrobody / complex surfaces not yet implemented in conversion:
-# RHP, HEX, REC, ELL, WED, ARB
+# REC, ELL, WED, ARB

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import argparse
-from math import pi, isclose
+from math import pi, isclose, sqrt
 import os
 import re
 import tempfile
@@ -18,10 +18,16 @@ from openmc.model.surface_composite import (
     RectangularParallelepiped as RPP,
     OrthogonalBox as BOX,
     ConicalFrustum as TRC,
+    HexagonalPrism,
 )
 from openmc.model import surface_composite
 
 from .parse import parse, _COMPLEMENT_RE, _CELL_FILL_RE
+
+
+# Magnitude of the height vector at or above which an RHP/HEX macrobody is
+# infinite along its axis, as in MCNP
+_RHP_INFINITE_HEIGHT = 1.0e6
 
 
 # The facet number corresponding to the SurfaceComposite's surface by
@@ -40,6 +46,16 @@ _MACROBODY_FACETS = {
         1: ('cyl', False),
         2: ('top', False),
         3: ('bottom', True)
+    },
+    HexagonalPrism: {
+        1: ('plane_max', False),
+        2: ('plane_min', True),
+        3: ('upper_right', False),
+        4: ('lower_left', True),
+        5: ('upper_left', False),
+        6: ('lower_right', True),
+        7: ('top', False),
+        8: ('bottom', True),
     },
     RPP: {
         1: ('xmax', False),
@@ -380,6 +396,55 @@ def get_openmc_surfaces(surfaces, data):
             r1 = coeffs[6]
             r2 = coeffs[7]
             surf = TRC(v, h, r1, r2)
+        elif s['mnemonic'] in ('rhp', 'hex'):
+            # Missing entries are zero, so that a lone value after the height
+            # vector is the x component of r
+            coeffs = list(coeffs)
+            if len(coeffs) < 9:
+                coeffs += [0.0]*(9 - len(coeffs))
+            v, h, r = (np.array(coeffs[i:i + 3]) for i in (0, 3, 6))
+            if len(coeffs) > 9:
+                # The facet vectors s and t are only supported for a regular
+                # hexagon, where they are r rotated by 60 and 120 degrees
+                # about h
+                coeffs += [0.0]*(15 - len(coeffs))
+                axis = h/np.linalg.norm(h)
+                x = r - axis*np.dot(axis, r)
+                y = np.cross(axis, x)
+                tolerance = 1e-5*np.linalg.norm(x)
+                for vec, angle in ((coeffs[9:12], pi/3),
+                                   (coeffs[12:15], 2*pi/3)):
+                    regular = x*np.cos(angle) + y*np.sin(angle)
+                    if not np.allclose(vec, regular, atol=tolerance):
+                        raise NotImplementedError(
+                            f"{s['mnemonic'].upper()} surface {s['id']} is "
+                            "not a regular hexagonal prism")
+
+            height = np.linalg.norm(h)
+            if height == 0.0:
+                raise ValueError(f"Height vector of {s['mnemonic'].upper()} "
+                                 f"surface {s['id']} must be nonzero")
+            axis = h/height
+
+            # Only the component of r perpendicular to the axis is meaningful
+            r = r - axis*np.dot(axis, r)
+            apothem = np.linalg.norm(r)
+            if apothem == 0.0:
+                raise ValueError(f"Facet vector of {s['mnemonic'].upper()} "
+                                 f"surface {s['id']} must be nonzero")
+
+            # Regular hexagon with facets perpendicular to x and an apothem
+            # equal to the length of r; the prism is infinite along its axis
+            # if the height is at least 1e6 cm, as in MCNP
+            ends = ({} if height >= _RHP_INFINITE_HEIGHT
+                    else {'zmin': 0.0, 'zmax': height})
+            surf = HexagonalPrism(edge_length=2*apothem/sqrt(3),
+                                  orientation='y', **ends)
+
+            # Rotate x onto r and z onto the axis, then move the bottom to v
+            x_axis = r/apothem
+            rotation = np.column_stack((x_axis, np.cross(axis, x_axis), axis))
+            surf = surf.rotate(rotation).translate(v)
         else:
             raise NotImplementedError('Surface type "{}" not supported'
                                       .format(s['mnemonic']))
