@@ -600,39 +600,6 @@ def _new_lattice(parameters, uid):
         return openmc.RectLattice(uid)
 
 
-def _plane_normal_offset(surface):
-    """Get the unit normal and signed distance to the origin of a plane
-
-    Parameters
-    ----------
-    surface : openmc.Surface
-        Planar surface
-
-    Returns
-    -------
-    normal : numpy.ndarray
-        Unit vector normal to the plane
-    offset : float
-        Signed distance from the origin to the plane along the normal
-
-    """
-    if isinstance(surface, openmc.XPlane):
-        normal, offset = np.array([1., 0., 0.]), surface.x0
-    elif isinstance(surface, openmc.YPlane):
-        normal, offset = np.array([0., 1., 0.]), surface.y0
-    elif isinstance(surface, openmc.ZPlane):
-        normal, offset = np.array([0., 0., 1.]), surface.z0
-    elif isinstance(surface, openmc.Plane):
-        # Coefficients of a general plane are not necessarily normalized
-        normal, offset = np.array([surface.a, surface.b, surface.c]), surface.d
-    else:
-        raise ValueError('Lattice cell must be bounded by planar surfaces but '
-                         'surface {} is a {}'.format(surface.id,
-                                                     type(surface).__name__))
-    length = np.linalg.norm(normal)
-    return normal/length, offset/length
-
-
 def _lattice_element(region):
     """Determine the geometry of a single lattice element
 
@@ -667,13 +634,19 @@ def _lattice_element(region):
 
     normals, offsets = [], []
     for node in region:
-        normal, offset = _plane_normal_offset(node.surface)
+        surface = node.surface
+        if not isinstance(surface, openmc.PlaneMixin):
+            raise ValueError('Lattice cell must be bounded by planar surfaces '
+                             'but surface {} is a {}'.format(
+                                 surface.id, type(surface).__name__))
+        normal = np.array([surface.a, surface.b, surface.c])
+        length = np.linalg.norm(normal)
 
         # A cell on the negative side of a plane has an outward normal that
         # points along the normal of the plane
         sense = 1.0 if node.side == '-' else -1.0
-        normals.append(sense*normal)
-        offsets.append(sense*offset)
+        normals.append(sense*normal/length)
+        offsets.append(sense*surface.d/length)
 
     vectors, rows, rhs = [], [], []
     for k in range(0, n, 2):
@@ -688,88 +661,6 @@ def _lattice_element(region):
 
     center = np.linalg.lstsq(np.array(rows), np.array(rhs), rcond=None)[0]
     return center, vectors
-
-
-def _parse_lattice_fill(fill):
-    """Parse the FILL card of a lattice cell
-
-    Parameters
-    ----------
-    fill : str
-        Value of the FILL parameter, either a single universe ID or an index
-        range for each of the three lattice directions followed by the universe
-        IDs of the array
-
-    Returns
-    -------
-    ranges : list of tuple of int
-        Lower and upper index along each of the three lattice directions
-    univ_ids : numpy.ndarray
-        Universe IDs of the array with the first index varying fastest
-    inf_lattice : bool
-        Whether the lattice is infinite (a single universe was given)
-
-    """
-    words = fill.split()
-
-    # If there's only a single parameter, the lattice is infinite
-    inf_lattice = (len(words) == 1)
-
-    if inf_lattice:
-        ranges = [(0, 0), (0, 0), (0, 0)]
-        univ_ids = words
-    else:
-        pairs = re.findall(r'-?\d+\s*:\s*-?\d+', fill)
-        i_colon = fill.rfind(':')
-        univ_ids = fill[i_colon + 1:].split()[1:]
-
-        if not pairs:
-            raise ValueError('Cant find lattice specification')
-
-        ranges = [tuple(map(int, pairs[i].split(':'))) for i in range(3)]
-        for lower, upper in ranges:
-            assert upper >= lower
-
-    return ranges, np.asarray(univ_ids, dtype=int), inf_lattice
-
-
-def _translate_lattice_universes(univ_ids, center, get_universe, universes):
-    """Replace the fill universes of a lattice by translated copies
-
-    In MCNP, the origin of the universe filling a lattice element is the origin
-    of the lattice cell itself, whereas in OpenMC it is the center of the
-    element.
-
-    Parameters
-    ----------
-    univ_ids : numpy.ndarray
-        Universe IDs filling the lattice elements
-    center : numpy.ndarray
-        Center of the [0,0,0] lattice element
-    get_universe : callable
-        Function returning the universe with a given ID
-    universes : dict
-        Dictionary mapping universe ID to universe. The translated universes
-        are added to it.
-
-    Returns
-    -------
-    numpy.ndarray
-        Universe IDs of the translated universes
-
-    """
-    univ_ids = np.array(univ_ids)
-    for uid in np.unique(univ_ids):
-        # Create translated universe
-        trans_cell = openmc.Cell(fill=get_universe(uid))
-        trans_cell.translation = -center
-        u = openmc.Universe(cells=[trans_cell])
-        universes[u.id] = u
-
-        # Replace original universes with translated ones
-        univ_ids[univ_ids == uid] = u.id
-
-    return univ_ids
 
 
 def _fill_rect_lattice(lattice, center, vectors, ranges, univ_ids,
@@ -1212,8 +1103,28 @@ def get_openmc_universes(cells, surfaces, materials, data):
                 center, vectors = _lattice_element(cell.region)
 
                 # Get extent of lattice
-                ranges, univ_ids, inf_lattice = _parse_lattice_fill(
-                    c['parameters']['fill'])
+                fill = c['parameters']['fill']
+                words = fill.split()
+
+                # If there's only a single parameter, the lattice is infinite
+                inf_lattice = (len(words) == 1)
+
+                if inf_lattice:
+                    ranges = [(0, 0), (0, 0), (0, 0)]
+                    univ_ids = words
+                else:
+                    pairs = re.findall(r'-?\d+\s*:\s*-?\d+', fill)
+                    i_colon = fill.rfind(':')
+                    univ_ids = fill[i_colon + 1:].split()[1:]
+
+                    if not pairs:
+                        raise ValueError('Cant find lattice specification')
+
+                    ranges = [tuple(map(int, pairs[i].split(':')))
+                              for i in range(3)]
+                    for lower, upper in ranges:
+                        assert upper >= lower
+                univ_ids = np.asarray(univ_ids, dtype=int)
 
                 # A finite lattice with a single axial layer becomes a 2D
                 # lattice whose universes are translated to the layer, so that
@@ -1243,8 +1154,15 @@ def get_openmc_universes(cells, surfaces, materials, data):
                 # If center of MCNP lattice element is not (0,0,0), we need
                 # to translate the universe
                 if not np.all(center == 0.0):
-                    univ_ids = _translate_lattice_universes(
-                        univ_ids, center, get_universe, universes)
+                    for uid in np.unique(univ_ids):
+                        # Create translated universe
+                        trans_cell = openmc.Cell(fill=get_universe(uid))
+                        trans_cell.translation = -center
+                        u = openmc.Universe(cells=[trans_cell])
+                        universes[u.id] = u
+
+                        # Replace original universes with translated ones
+                        univ_ids[univ_ids == uid] = u.id
 
                 if hexagonal:
                     _fill_hex_lattice(lattice, center, vectors, ranges,

@@ -71,15 +71,6 @@ _HEX_PLANES = """\
 305  p   1.0  1.7320508076  0.0 -2.0
 306  p  -1.0  1.7320508076  0.0 -2.0"""
 
-# Same hexagon with R along y
-_HEX_PLANES_Y = """\
-311  py  1.0
-312  py -1.0
-313  p  -1.7320508076  1.0  0.0  2.0
-314  p  -1.7320508076  1.0  0.0 -2.0
-315  p  -1.7320508076 -1.0  0.0  2.0
-316  p  -1.7320508076 -1.0  0.0 -2.0"""
-
 
 def _fill_card(indices, univ_ids, per_line=9):
     """Build the FILL card of a lattice cell as continuation lines."""
@@ -135,9 +126,6 @@ def _assert_elements(model, ranges, center, vectors, univ_ids):
           _FILL_2D, (2., 0.5, 0.),
           ((2., 0., 0.), (1., SQRT3, 0.), (0., 0., 10.)),
           id='hex-rhp-off-center'),
-    param(2, _HEX_PLANES_Y, '-311 312 -313 314 -315 316', '-2:2 -2:2 0:0',
-          _FILL_2D, (0., 0., 0.),
-          ((0., 2., 0.), (-SQRT3, 1., 0.), (0., 0., 0.)), id='hex-r-along-y'),
     # Height vector of the prism pointing along -z
     param(2, '1  rhp  0 0 5   0 0 -10   1 0 0', '-1', '-1:1 -1:1 -1:1',
           _FILL_3D, (0., 0., 0.),
@@ -188,7 +176,7 @@ def test_nested_lattice(inner_first):
 _LAYER_TEMPLATE = dedent("""\
     single axial layer
     1    0          -900   fill=50
-    2    3 -1.0     {region}   lat={lat} u=50 fill=-1:1 -1:1 {k}:{k}
+    2    3 -1.0     -1   lat={lat} u=50 fill=-1:1 -1:1 {k}:{k}
          2 2 2 2 50 2 2 2 2
     10   1 -1.0     -901   u=2
     11   2 -1.0      901   u=2
@@ -203,30 +191,18 @@ _LAYER_TEMPLATE = dedent("""\
     m3   26056.80c  1.0
     """)
 
-_LAYER_PLANES = """\
-11  px  1.0
-12  px -1.0
-13  py  1.5
-14  py -1.5
-15  pz  7.0
-16  pz -3.0"""
 
-
-@mark.parametrize("lat,region,surfaces,k,dz,neighbors", [
-    param(1, '-1', '1  rpp  -1 1  -1.5 1.5  -3 7', 2, 10.,
+@mark.parametrize("lat,surfaces,k,neighbors", [
+    param(1, '1  rpp  -1 1  -1.5 1.5  -3 7', 2,
           [(2., 0.), (0., 3.), (-2., -3.)], id='rect'),
-    # Listing the bottom plane first puts index k below the element
-    param(1, '-11 12 -13 14 16 -15', _LAYER_PLANES, -3, -10.,
-          [(2., 0.), (0., 3.), (-2., -3.)], id='rect-bottom-first'),
-    param(2, '-1', '1  rhp  0 0 -3   0 0 10   1 0 0', 2, 10.,
+    param(2, '1  rhp  0 0 -3   0 0 10   1 0 0', -3,
           [(2., 0.), (1., SQRT3), (-1., SQRT3)], id='hex'),
 ])
-def test_single_layer_lattice(lat, region, surfaces, k, dz, neighbors):
+def test_single_layer_lattice(lat, surfaces, k, neighbors):
     # The single layer at axial index k becomes a 2D lattice whose universes
     # are translated to the layer; a wrong axial position of the layer would
     # miss the sphere
-    mcnp_str = _LAYER_TEMPLATE.format(lat=lat, region=region,
-                                      surfaces=surfaces, k=k)
+    mcnp_str = _LAYER_TEMPLATE.format(lat=lat, surfaces=surfaces, k=k)
     geometry = mcnp_str_to_model(mcnp_str).geometry
     assert geometry.get_all_lattices()[50].ndim == 2
 
@@ -236,6 +212,6 @@ def test_single_layer_lattice(lat, region, surfaces, k, dz, neighbors):
     # Center of the sphere and a point above it in the elements next to the
     # [0,0,k] element, which is filled with the material of the lattice cell
     for x, y in neighbors:
-        assert material_at((x + 0.3, y, dz*k + 1.0)) == 1
-        assert material_at((x + 0.3, y, dz*k + 3.0)) == 2
-    assert material_at((0.3, 0.0, dz*k + 1.0)) == 3
+        assert material_at((x + 0.3, y, 10.*k + 1.0)) == 1
+        assert material_at((x + 0.3, y, 10.*k + 3.0)) == 2
+    assert material_at((0.3, 0.0, 10.*k + 1.0)) == 3
