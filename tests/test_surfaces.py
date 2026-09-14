@@ -6,7 +6,8 @@ import openmc
 from openmc.model.surface_composite import OrthogonalBox, \
     RectangularParallelepiped, RightCircularCylinder, ConicalFrustum, \
     XConeOneSided, YConeOneSided, ZConeOneSided
-from openmc_mcnp_adapter import mcnp_str_to_model, get_openmc_surfaces
+from openmc_mcnp_adapter import mcnp_str_to_model, get_openmc_surfaces, \
+    RightHexagonalPrism
 from pytest import approx, mark, raises, warns
 
 
@@ -554,5 +555,144 @@ def test_rpp_facets():
     assert (0., 0., 6.0) not in cells[3].region
 
 
+SQRT3_2 = np.sqrt(3.)/2
+
+
+def unit_normal(plane):
+    """Return the unit normal of a plane"""
+    normal = np.array([plane.a, plane.b, plane.c])
+    return normal/np.linalg.norm(normal)
+
+
+def test_rhp_macrobody():
+    # Regular hexagonal prism along the z-axis with an apothem of 1 cm
+    surf = convert_surface("rhp", (0., 0., -5., 0., 0., 10., 1., 0., 0.))
+    assert isinstance(surf, RightHexagonalPrism)
+
+    # Facets in MCNP order have outward normals along r, then r rotated by 60
+    # and 120 degrees about h, then h
+    assert unit_normal(surf.plane_max) == approx((1., 0., 0.))
+    assert unit_normal(surf.upper_right) == approx((0.5, SQRT3_2, 0.))
+    assert unit_normal(surf.upper_left) == approx((-0.5, SQRT3_2, 0.))
+    assert unit_normal(surf.top) == approx((0., 0., 1.))
+
+    # Points near the facets; +y points at a vertex, 1/cos(30 deg) away
+    assert (0., 0., 0.) in -surf
+    assert (0.99, 0., 0.) in -surf
+    assert (1.01, 0., 0.) in +surf
+    assert (-0.99, 0., 0.) in -surf
+    assert (-1.01, 0., 0.) in +surf
+    assert (0.99*0.5, 0.99*SQRT3_2, 0.) in -surf
+    assert (1.01*0.5, 1.01*SQRT3_2, 0.) in +surf
+    assert (0., 1.14, 0.) in -surf
+    assert (0., 1.17, 0.) in +surf
+    assert (0., 0., 4.99) in -surf
+    assert (0., 0., 5.01) in +surf
+    assert (0., 0., -4.99) in -surf
+    assert (0., 0., -5.01) in +surf
+
+
+def test_rhp_macrobody_rotated():
+    # The rotation giving the third facet follows the height vector, so a
+    # prism along -z has it at -60 degrees
+    surf = convert_surface("rhp", (0., 0., 5., 0., 0., -10., 1., 0., 0.))
+    assert unit_normal(surf.upper_right) == approx((0.5, -SQRT3_2, 0.))
+    assert unit_normal(surf.top) == approx((0., 0., -1.))
+    assert (0., 0., -4.99) in -surf
+    assert (0., 0., -5.01) in +surf
+
+    # Axis along (1, 1, 0) with r along z; the third facet is r rotated by 60
+    # degrees about the axis
+    surf = convert_surface("rhp", (0., 0., 0., 1., 1., 0., 0., 0., 2.))
+    mid = np.array((0.5, 0.5, 0.))
+    third = np.array((np.sqrt(6)/2, -np.sqrt(6)/2, 1.))
+    assert tuple(mid) in -surf
+    assert (0.5, 0.5, 1.99) in -surf
+    assert (0.5, 0.5, 2.01) in +surf
+    assert tuple(mid + 0.99*third) in -surf
+    assert tuple(mid + 1.01*third) in +surf
+    assert (-0.01, -0.01, 0.) in +surf
+    assert (1.01, 1.01, 0.) in +surf
+
+
+def test_rhp_macrobody_short_card():
+    # Missing entries are zero: a single value after the height vector is the
+    # x component of r, two values give r along y
+    surf = convert_surface("hex", (0., 0., -5., 0., 0., 10., 1.))
+    assert unit_normal(surf.plane_max) == approx((1., 0., 0.))
+    assert (0.99, 0., 0.) in -surf
+    assert (1.01, 0., 0.) in +surf
+
+    surf = convert_surface("hex", (0., 0., -5., 0., 0., 10., 0., 2.))
+    assert unit_normal(surf.plane_max) == approx((0., 1., 0.))
+    assert (0., 1.99, 0.) in -surf
+    assert (0., 2.01, 0.) in +surf
+
+
+def test_rhp_macrobody_facet_vectors():
+    # Explicit s and t vectors of a regular hexagon are accepted
+    coeffs = (0., 0., -5., 0., 0., 10., 1., 0., 0.,
+              0.5, SQRT3_2, 0., -0.5, SQRT3_2, 0.)
+    surf = convert_surface("rhp", coeffs)
+    assert (0.99*0.5, 0.99*SQRT3_2, 0.) in -surf
+    assert (1.01*0.5, 1.01*SQRT3_2, 0.) in +surf
+
+    # An irregular hexagon is not supported
+    with raises(NotImplementedError):
+        convert_surface("rhp", coeffs[:9] + (0., 1., 0., -1., 0., 0.))
+
+
+def test_rhp_macrobody_inf():
+    # A height of at least 1e6 makes the prism infinite along its axis
+    surf = convert_surface("rhp", (0., 0., 0., 0., 0., 1e6, 1., 0., 0.))
+    assert not hasattr(surf, 'top')
+    assert (0., 0., 1e7) in -surf
+    assert (1.01, 0., 1e7) in +surf
+
+
+def test_rhp_facets():
+    mcnp_str = dedent("""
+    title
+    1  1 -1.0  -1.1 -1.2
+    2  1 -1.0  -1.3 -1.4
+    3  1 -1.0  -1.7 -1.8
+    4  1 -1.0  1.1
+    5  1 -1.0  -1
+
+    1  rhp 0.0 0.0 -5.0  0.0 0.0 10.0  1.0 0.0 0.0
+
+    m1   1001.80c  3.0
+    """)
+    model = mcnp_str_to_model(mcnp_str)
+    cells = model.geometry.get_all_cells()
+
+    # Slab between the first and second facets
+    assert (0., 0., 0.) in cells[1].region
+    assert (1.5, 0., 0.) not in cells[1].region
+    assert (-1.5, 0., 0.) not in cells[1].region
+    assert (0., 5., 0.) in cells[1].region
+
+    # Slab between the third and fourth facets
+    assert (0., 0., 0.) in cells[2].region
+    assert (1.5*0.5, 1.5*SQRT3_2, 0.) not in cells[2].region
+    assert (-1.5*0.5, -1.5*SQRT3_2, 0.) not in cells[2].region
+    assert (-5.*SQRT3_2, 5.*0.5, 0.) in cells[2].region
+
+    # Slab between the two end facets
+    assert (0., 0., 0.) in cells[3].region
+    assert (0., 0., 6.) not in cells[3].region
+    assert (0., 0., -6.) not in cells[3].region
+    assert (50., 0., 0.) in cells[3].region
+
+    # Outside of the first facet
+    assert (2., 0., 0.) in cells[4].region
+    assert (0., 0., 0.) not in cells[4].region
+
+    # Inside of the entire macrobody
+    assert (0., 0., 0.) in cells[5].region
+    assert (1.5, 0., 0.) not in cells[5].region
+    assert (0., 0., 6.) not in cells[5].region
+
+
 # Remaining macrobody / complex surfaces not yet implemented in conversion:
-# RHP, HEX, REC, ELL, WED, ARB
+# REC, ELL, WED, ARB
