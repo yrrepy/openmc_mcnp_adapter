@@ -26,6 +26,10 @@ The converter will try to set surface boundary conditions to match the MCNP
 model, but in many cases it doesn't work cleanly. For these cases, you will need
 to manually set boundary conditions on the outermost surfaces.
 
+A lattice whose `FILL` array has a single axial layer is converted to a
+two-dimensional lattice. The top and bottom of the layer are then not surfaces
+of the lattice, which avoids coincident surfaces with the cell that contains it.
+
 Some geometry features are not currently supported:
 
 - `X`, `Y`, and `Z` surfaces with 3 coordinate pairs

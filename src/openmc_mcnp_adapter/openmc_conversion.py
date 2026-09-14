@@ -1215,6 +1215,16 @@ def get_openmc_universes(cells, surfaces, materials, data):
                 ranges, univ_ids, inf_lattice = _parse_lattice_fill(
                     c['parameters']['fill'])
 
+                # A finite lattice with a single axial layer becomes a 2D
+                # lattice whose universes are translated to the layer, so that
+                # the top and bottom of the layer are not lattice surfaces
+                # coincident with those of the cell that contains it
+                k1, k2 = ranges[2]
+                if len(vectors) == (4 if hexagonal else 3) and k1 == k2 \
+                        and not inf_lattice:
+                    center[2] = -k1*vectors[-1][2]
+                    vectors = vectors[:-1]
+
                 # Check for universe ID same as the ID assigned to the cell
                 # itself -- since OpenMC can't handle this directly, we need
                 # to create an extra cell/universe to fill in the lattice. The

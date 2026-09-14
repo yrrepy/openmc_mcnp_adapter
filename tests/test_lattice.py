@@ -181,3 +181,61 @@ def test_nested_lattice(inner_first):
     assert geometry.find((4.0, 0.0, 0.0))[-1].fill.id == 2
     # Same for the outer element at (0, 3, 0)
     assert geometry.find((0.0, 3.0, 0.0))[-1].fill.id == 1
+
+
+# Lattice cell 10 cm high from z = -3 to 7 whose universe 2 holds a sphere
+# offset from the origin of the universe
+_LAYER_TEMPLATE = dedent("""\
+    single axial layer
+    1    0          -900   fill=50
+    2    3 -1.0     {region}   lat={lat} u=50 fill=-1:1 -1:1 {k}:{k}
+         2 2 2 2 50 2 2 2 2
+    10   1 -1.0     -901   u=2
+    11   2 -1.0      901   u=2
+    20   0           900
+
+    {surfaces}
+    900  so 100.0
+    901  s 0.3 0.0 1.0 0.8
+
+    m1   1001.80c   1.0
+    m2   8016.80c   1.0
+    m3   26056.80c  1.0
+    """)
+
+_LAYER_PLANES = """\
+11  px  1.0
+12  px -1.0
+13  py  1.5
+14  py -1.5
+15  pz  7.0
+16  pz -3.0"""
+
+
+@mark.parametrize("lat,region,surfaces,k,dz,neighbors", [
+    param(1, '-1', '1  rpp  -1 1  -1.5 1.5  -3 7', 2, 10.,
+          [(2., 0.), (0., 3.), (-2., -3.)], id='rect'),
+    # Listing the bottom plane first puts index k below the element
+    param(1, '-11 12 -13 14 16 -15', _LAYER_PLANES, -3, -10.,
+          [(2., 0.), (0., 3.), (-2., -3.)], id='rect-bottom-first'),
+    param(2, '-1', '1  rhp  0 0 -3   0 0 10   1 0 0', 2, 10.,
+          [(2., 0.), (1., SQRT3), (-1., SQRT3)], id='hex'),
+])
+def test_single_layer_lattice(lat, region, surfaces, k, dz, neighbors):
+    # The single layer at axial index k becomes a 2D lattice whose universes
+    # are translated to the layer; a wrong axial position of the layer would
+    # miss the sphere
+    mcnp_str = _LAYER_TEMPLATE.format(lat=lat, region=region,
+                                      surfaces=surfaces, k=k)
+    geometry = mcnp_str_to_model(mcnp_str).geometry
+    assert geometry.get_all_lattices()[50].ndim == 2
+
+    def material_at(point):
+        return geometry.find(point)[-1].fill.id
+
+    # Center of the sphere and a point above it in the elements next to the
+    # [0,0,k] element, which is filled with the material of the lattice cell
+    for x, y in neighbors:
+        assert material_at((x + 0.3, y, dz*k + 1.0)) == 1
+        assert material_at((x + 0.3, y, dz*k + 3.0)) == 2
+    assert material_at((0.3, 0.0, dz*k + 1.0)) == 3
