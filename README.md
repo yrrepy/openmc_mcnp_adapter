@@ -26,6 +26,13 @@ The converter will try to set surface boundary conditions to match the MCNP
 model, but in many cases it doesn't work cleanly. For these cases, you will need
 to manually set boundary conditions on the outermost surfaces.
 
+A lattice whose `FILL` array has a single axial layer is converted to a
+two-dimensional lattice. MCNP loses a particle that leaves the layer through its
+top or bottom, so a valid model never depends on these boundaries, whereas in
+OpenMC they could coincide with the boundaries of the cell above and lose the
+particle by roundoff. A particle that MCNP would lose there continues in the
+same lattice element in the converted model.
+
 Some geometry features are not currently supported:
 
 - `X`, `Y`, and `Z` surfaces with 3 coordinate pairs
