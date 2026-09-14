@@ -60,6 +60,26 @@ _RECT_PLANES = """\
 205  pz  2.0
 206  pz -2.0"""
 
+SQRT3 = 1.7320508076
+
+# Manual Listing 10.8: hexagon with an apothem of 1 cm centered at the origin
+_HEX_PLANES = """\
+301  px  1.0
+302  px -1.0
+303  p   1.0  1.7320508076  0.0  2.0
+304  p  -1.0  1.7320508076  0.0  2.0
+305  p   1.0  1.7320508076  0.0 -2.0
+306  p  -1.0  1.7320508076  0.0 -2.0"""
+
+# Same hexagon with R along y
+_HEX_PLANES_Y = """\
+311  py  1.0
+312  py -1.0
+313  p  -1.7320508076  1.0  0.0  2.0
+314  p  -1.7320508076  1.0  0.0 -2.0
+315  p  -1.7320508076 -1.0  0.0  2.0
+316  p  -1.7320508076 -1.0  0.0 -2.0"""
+
 
 def _fill_card(indices, univ_ids, per_line=9):
     """Build the FILL card of a lattice cell as continuation lines."""
@@ -127,6 +147,36 @@ def test_rect_lattice_3d(region, vectors):
 
 def test_rect_lattice_infinite():
     model = _convert(1, '-201 202 -203 204', _RECT_PLANES, '', [3])
+    lattice = model.geometry.get_all_lattices()[50]
+    assert lattice.outer is not None
+    assert model.geometry.find((45.3, -20.1, 0.))[-1].fill.id == 2
+
+
+@mark.parametrize("surfaces,region,center,vectors", [
+    param(_HEX_PLANES, '-301 302 -303 305 -304 306', (0., 0., 0.),
+          ((2., 0., 0.), (1., SQRT3, 0.), (0., 0., 0.)), id='planes'),
+    param('1  rhp  2 0.5 -5   0 0 10   1 0 0', '-1', (2., 0.5, 0.),
+          ((2., 0., 0.), (1., SQRT3, 0.), (0., 0., 10.)), id='rhp-off-center'),
+    param(_HEX_PLANES_Y, '-311 312 -313 314 -315 316', (0., 0., 0.),
+          ((0., 2., 0.), (-SQRT3, 1., 0.), (0., 0., 0.)), id='r-along-y'),
+])
+def test_hex_lattice(surfaces, region, center, vectors):
+    ranges = ((-2, 2), (-2, 2), (0, 0))
+    model = _convert(2, region, surfaces, '-2:2 -2:2 0:0', _FILL_2D)
+    _assert_elements(model, ranges, center, vectors, _FILL_2D)
+
+
+def test_hex_lattice_3d():
+    # Height vector of the prism pointing along -z
+    ranges = ((-1, 1), (-1, 1), (-1, 1))
+    vectors = ((2., 0., 0.), (1., -SQRT3, 0.), (0., 0., -10.))
+    model = _convert(2, '-1', '1  rhp  0 0 5   0 0 -10   1 0 0',
+                     '-1:1 -1:1 -1:1', _FILL_3D)
+    _assert_elements(model, ranges, (0., 0., 0.), vectors, _FILL_3D)
+
+
+def test_hex_lattice_infinite():
+    model = _convert(2, '-301 302 -303 305 -304 306', _HEX_PLANES, '', [3])
     lattice = model.geometry.get_all_lattices()[50]
     assert lattice.outer is not None
     assert model.geometry.find((45.3, -20.1, 0.))[-1].fill.id == 2
