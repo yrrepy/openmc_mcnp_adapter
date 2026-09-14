@@ -158,3 +158,37 @@ def test_hex_lattice_3d():
     model = _convert(2, '-1', '1  rhp  0 0 5   0 0 -10   1 0 0',
                      '-1:1 -1:1 -1:1', _FILL_3D)
     _assert_elements(model, ranges, (0., 0., 0.), vectors, _FILL_3D)
+
+
+@mark.parametrize("inner_first", [True, False])
+def test_nested_lattice(inner_first):
+    # 3x3 outer lattice (pitch 3) whose elements are universe 2, itself a 3x3
+    # lattice (pitch 1) with universe 3 at its center and universe 4 elsewhere
+    outer = "2 0 -2 LAT=1 U=1 FILL=-1:1 -1:1 0:0 2 2 2 2 2 2 2 2 2"
+    inner = "3 0 -3 LAT=1 U=2 FILL=-1:1 -1:1 0:0 4 4 4 4 3 4 4 4 4"
+    lattices = f"{inner}\n    {outer}" if inner_first else f"{outer}\n    {inner}"
+    mcnp_str = dedent(f"""
+    title
+    1 0 -1 FILL=1
+    {lattices}
+    4 1 -1.0 -4 U=3
+    5 2 -2.0 +4 U=3
+    6 2 -2.0 -5 U=4
+
+    1 rpp -4.5 4.5 -4.5 4.5 -4.5 4.5
+    2 rpp -1.5 1.5 -1.5 1.5 -1.5 1.5
+    3 rpp -0.5 0.5 -0.5 0.5 -1.5 1.5
+    4 so 0.2
+    5 so 10.0
+
+    m1   1001.80c  1.0
+    m2   1002.80c  1.0
+    """)
+    geometry = mcnp_str_to_model(mcnp_str).geometry
+
+    # Center of the inner center element of the outer element at (3, 0, 0)
+    assert geometry.find((3.0, 0.0, 0.0))[-1].fill.id == 1
+    # One inner pitch over is the surrounding universe 4
+    assert geometry.find((4.0, 0.0, 0.0))[-1].fill.id == 2
+    # Same for the outer element at (0, 3, 0)
+    assert geometry.find((0.0, 3.0, 0.0))[-1].fill.id == 1
