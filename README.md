@@ -31,9 +31,10 @@ Some geometry features are not currently supported:
 - `X`, `Y`, and `Z` surfaces with 3 coordinate pairs
 - `REC`, `ELL`, `WED`, and `ARB` macrobodies
 - `RHP` and `HEX` macrobodies that are not regular hexagonal prisms
-- Hexagonal lattices
 - One-dimensional lattices
 - Two-dimensional lattices with basis other than x-y
+- Hexagonal lattices whose prism axis is not z, or whose faces are not
+  perpendicular to x or y
 - `U`, `LAT`, and `FILL` cards specified in the data card block
 
 Converting `RHP` and `HEX` macrobodies needs a version of OpenMC newer than

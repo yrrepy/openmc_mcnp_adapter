@@ -60,6 +60,27 @@ _RECT_PLANES = """\
 205  pz  2.0
 206  pz -2.0"""
 
+SQRT3 = 1.7320508076
+
+# Manual Listing 10.8: hexagon with an apothem of 1 cm centered at the origin
+_HEX_PLANES = """\
+301  px  1.0
+302  px -1.0
+303  p   1.0  1.7320508076  0.0  2.0
+304  p  -1.0  1.7320508076  0.0  2.0
+305  p   1.0  1.7320508076  0.0 -2.0
+306  p  -1.0  1.7320508076  0.0 -2.0"""
+
+# Same hexagon with R along y
+_HEX_PLANES_Y = """\
+311  py  1.0
+312  py -1.0
+313  p  -1.7320508076  1.0  0.0  2.0
+314  p  -1.7320508076  1.0  0.0 -2.0
+315  p  -1.7320508076 -1.0  0.0  2.0
+316  p  -1.7320508076 -1.0  0.0 -2.0"""
+
+
 def _fill_card(indices, univ_ids, per_line=9):
     """Build the FILL card of a lattice cell as continuation lines."""
     lines = ['     fill=' + indices]
@@ -107,6 +128,20 @@ def _assert_elements(model, ranges, center, vectors, univ_ids):
     param(1, _RECT_PLANES, '206 -205 -201 202 -203 204', '-1:1 -1:1 -1:1',
           _FILL_3D, (0., 0., 0.), ((0., 0., -4.), (2., 0., 0.), (0., 3., 0.)),
           id='rect-3d'),
+    param(2, _HEX_PLANES, '-301 302 -303 305 -304 306', '-2:2 -2:2 0:0',
+          _FILL_2D, (0., 0., 0.), ((2., 0., 0.), (1., SQRT3, 0.), (0., 0., 0.)),
+          id='hex-planes'),
+    param(2, '1  rhp  2 0.5 -5   0 0 10   1 0 0', '-1', '-2:2 -2:2 0:0',
+          _FILL_2D, (2., 0.5, 0.),
+          ((2., 0., 0.), (1., SQRT3, 0.), (0., 0., 10.)),
+          id='hex-rhp-off-center'),
+    param(2, _HEX_PLANES_Y, '-311 312 -313 314 -315 316', '-2:2 -2:2 0:0',
+          _FILL_2D, (0., 0., 0.),
+          ((0., 2., 0.), (-SQRT3, 1., 0.), (0., 0., 0.)), id='hex-r-along-y'),
+    # Height vector of the prism pointing along -z
+    param(2, '1  rhp  0 0 5   0 0 -10   1 0 0', '-1', '-1:1 -1:1 -1:1',
+          _FILL_3D, (0., 0., 0.),
+          ((2., 0., 0.), (1., -SQRT3, 0.), (0., 0., -10.)), id='hex-3d'),
 ])
 def test_lattice(lat, surfaces, region, indices, fill, center, vectors):
     model = _convert(lat, region, surfaces, indices, fill)
