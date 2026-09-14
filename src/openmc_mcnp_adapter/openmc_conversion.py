@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import argparse
-from math import pi, isclose
+from math import pi, isclose, sqrt
 import os
 import re
 import tempfile
@@ -18,10 +18,95 @@ from openmc.model.surface_composite import (
     RectangularParallelepiped as RPP,
     OrthogonalBox as BOX,
     ConicalFrustum as TRC,
+    HexagonalPrism,
 )
 from openmc.model import surface_composite
 
 from .parse import parse, _COMPLEMENT_RE, _CELL_FILL_RE
+
+
+# Magnitude of the height vector at or above which an RHP/HEX macrobody is
+# infinite along its axis, as in MCNP
+_RHP_INFINITE_HEIGHT = 1.0e6
+
+
+class RightHexagonalPrism(HexagonalPrism):
+    """Right hexagonal prism equivalent to the MCNP RHP/HEX macrobody
+
+    The six side facets are those of :class:`openmc.model.HexagonalPrism` and
+    two planes close the ends of the prism, unless the magnitude of ``h`` is
+    at least 1e6 cm, in which case the prism is infinite along its axis as in
+    MCNP. The prism is created along the z-axis with ``r`` along the x-axis
+    and then rotated and translated into place. The region inside the prism
+    intersects the facets in MCNP order.
+
+    Parameters
+    ----------
+    v : iterable of float
+        (x,y,z) coordinates of the bottom of the prism axis
+    h : iterable of float
+        Vector along the axis of the prism starting from ``v``
+    r : iterable of float
+        Vector from the axis of the prism to the center of the first facet
+
+    Attributes
+    ----------
+    plane_max, plane_min : openmc.Plane
+        First and second facets, at the end of ``r`` and opposite to it
+    upper_right, lower_left : openmc.Plane
+        Third and fourth facets, at the end of ``r`` rotated by 60 degrees
+        about ``h`` and opposite to it
+    upper_left, lower_right : openmc.Plane
+        Fifth and sixth facets, at the end of ``r`` rotated by 120 degrees
+        about ``h`` and opposite to it
+    top, bottom : openmc.Plane
+        Seventh and eighth facets, at the end of ``h`` and at ``v``. Not
+        present for an infinite prism.
+
+    """
+    _surface_names = HexagonalPrism._surface_names + ('top', 'bottom')
+
+    def __init__(self, v, h, r):
+        v, h, r = (np.asarray(x, dtype=float) for x in (v, h, r))
+        height = np.linalg.norm(h)
+        if height == 0.0:
+            raise ValueError('Height vector of hexagonal prism must be '
+                             'nonzero')
+        axis = h/height
+
+        # Only the component of r perpendicular to the axis is meaningful
+        r = r - axis*np.dot(axis, r)
+        apothem = np.linalg.norm(r)
+        if apothem == 0.0:
+            raise ValueError('Facet vector of hexagonal prism must be nonzero')
+
+        # Regular hexagon with facets perpendicular to x and an apothem equal
+        # to the length of r
+        super().__init__(edge_length=2*apothem/sqrt(3), orientation='y')
+        if height >= _RHP_INFINITE_HEIGHT:
+            self._surface_names = HexagonalPrism._surface_names
+        else:
+            self.top = openmc.ZPlane(height)
+            self.bottom = openmc.ZPlane(0.0)
+
+        # Rotate x onto r and z onto the axis, then move the bottom to v
+        x_axis = r/apothem
+        rotation = np.column_stack((x_axis, np.cross(axis, x_axis), axis))
+        for name in self._surface_names:
+            surface = getattr(self, name).rotate(rotation).translate(v)
+            setattr(self, name, surface)
+
+    def __neg__(self):
+        # Facets in MCNP order, which the conversion of lattices relies on
+        region = (-self.plane_max & +self.plane_min &
+                  -self.upper_right & +self.lower_left &
+                  -self.upper_left & +self.lower_right)
+        if hasattr(self, 'top'):
+            region &= -self.top & +self.bottom
+        return region
+
+
+RHP = RightHexagonalPrism
 
 
 # The facet number corresponding to the SurfaceComposite's surface by
@@ -40,6 +125,16 @@ _MACROBODY_FACETS = {
         1: ('cyl', False),
         2: ('top', False),
         3: ('bottom', True)
+    },
+    RHP: {
+        1: ('plane_max', False),
+        2: ('plane_min', True),
+        3: ('upper_right', False),
+        4: ('lower_left', True),
+        5: ('upper_left', False),
+        6: ('lower_right', True),
+        7: ('top', False),
+        8: ('bottom', True),
     },
     RPP: {
         1: ('xmax', False),
@@ -380,6 +475,30 @@ def get_openmc_surfaces(surfaces, data):
             r1 = coeffs[6]
             r2 = coeffs[7]
             surf = TRC(v, h, r1, r2)
+        elif s['mnemonic'] in ('rhp', 'hex'):
+            # Missing entries are zero, so that a lone value after the height
+            # vector is the x component of r
+            coeffs = list(coeffs)
+            if len(coeffs) < 9:
+                coeffs += [0.0]*(9 - len(coeffs))
+            v, h, r = (np.array(coeffs[i:i + 3]) for i in (0, 3, 6))
+            if len(coeffs) > 9:
+                # The facet vectors s and t are only supported for a regular
+                # hexagon, where they are r rotated by 60 and 120 degrees
+                # about h
+                coeffs += [0.0]*(15 - len(coeffs))
+                axis = h/np.linalg.norm(h)
+                x = r - axis*np.dot(axis, r)
+                y = np.cross(axis, x)
+                tolerance = 1e-5*np.linalg.norm(x)
+                for vec, angle in ((coeffs[9:12], pi/3),
+                                   (coeffs[12:15], 2*pi/3)):
+                    regular = x*np.cos(angle) + y*np.sin(angle)
+                    if not np.allclose(vec, regular, atol=tolerance):
+                        raise NotImplementedError(
+                            f"{s['mnemonic'].upper()} surface {s['id']} is "
+                            "not a regular hexagonal prism")
+            surf = RHP(v, h, r)
         else:
             raise NotImplementedError('Surface type "{}" not supported'
                                       .format(s['mnemonic']))
