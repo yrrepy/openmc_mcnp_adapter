@@ -25,11 +25,6 @@ from openmc.model import surface_composite
 from .parse import parse, _COMPLEMENT_RE, _CELL_FILL_RE
 
 
-# Magnitude of the height vector at or above which an RHP/HEX macrobody is
-# infinite along its axis, as in MCNP
-_RHP_INFINITE_HEIGHT = 1.0e6
-
-
 # The facet number corresponding to the SurfaceComposite's surface by
 # attribute name and whether or not to flip the sense of that surface
 # based on the facet surface's relationship to the composite surface region
@@ -436,7 +431,7 @@ def get_openmc_surfaces(surfaces, data):
             # Regular hexagon with facets perpendicular to x and an apothem
             # equal to the length of r; the prism is infinite along its axis
             # if the height is at least 1e6 cm, as in MCNP
-            ends = ({} if height >= _RHP_INFINITE_HEIGHT
+            ends = ({} if height >= 1.0e6
                     else {'zmin': 0.0, 'zmax': height})
             surf = HexagonalPrism(edge_length=2*apothem/sqrt(3),
                                   orientation='y', **ends)
